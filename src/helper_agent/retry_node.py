@@ -14,25 +14,7 @@ ExceptionTypes = Tuple[Type[BaseException], ...]
 
 @dataclass
 class RetryNode:
-    """
-    A LangGraph-style node wrapper that adds retry behavior
-    around an existing node function.
 
-    Usage:
-
-        def call_llm(state: AgentState) -> AgentState:
-            ...
-
-        retrying_llm_node = RetryNode(
-            base_node=call_llm,
-            name="llm_call_node",
-            max_attempts=4,
-            base_delay=1.5,
-            exception_types=(TimeoutError, ConnectionError),
-        ).as_node()
-
-        builder.add_node("llm_call", retrying_llm_node)
-    """
 
     base_node: Callable[[AgentState], AgentState]
     name: str

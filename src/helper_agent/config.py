@@ -8,17 +8,17 @@ from typing import Literal, Optional
 from dotenv import load_dotenv
 load_dotenv()
 
-# -----------------------------------------------------
+
 # Types
-# -----------------------------------------------------
+
 Mode = Literal["offline", "online"]
 Reasoning = Literal["basic", "orc", "react", "hybrid"]
 SearchProvider = Literal["duckduckgo", "none"]
 
 
-# -----------------------------------------------------
+
 # Configuration Dataclass
-# -----------------------------------------------------
+
 @dataclass
 class AppConfig:
     # Core mode
@@ -45,9 +45,9 @@ class AppConfig:
     max_output_tokens: int = 2048
 
 
-# -----------------------------------------------------
+
 # Config Loader
-# -----------------------------------------------------
+
 def load_config(
     cli_mode: Optional[str] = None,
     cli_reasoning: Optional[str] = None,
@@ -63,7 +63,7 @@ def load_config(
     gemini_api_key = os.getenv("GEMINI_API_KEY")
     if not gemini_api_key:
         raise RuntimeError(
-            "❌ Missing GEMINI_API_KEY.\n"
+            " Missing GEMINI_API_KEY.\n"
             "Create one at https://aistudio.google.com\n"
             "Add to .env:\n\n"
             "  GEMINI_API_KEY=your_key_here\n"

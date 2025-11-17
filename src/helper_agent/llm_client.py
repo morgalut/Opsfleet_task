@@ -22,9 +22,7 @@ class LLMClient:
       - max token auto-expansion
     """
 
-    # ============================================================
     # INIT
-    # ============================================================
     def __init__(self, config: AppConfig) -> None:
         self.config = config
 
@@ -87,9 +85,7 @@ class LLMClient:
         # default max tokens (can be overridden by config)
         self.max_output_tokens: int = getattr(config, "max_output_tokens", 2048)
 
-    # ============================================================
     # PUBLIC: GENERATE (with retry + truncation recovery)
-    # ============================================================
     def generate(
         self,
         prompt: str,
@@ -136,9 +132,7 @@ class LLMClient:
 
         return "(no output)"
 
-    # ============================================================
     # INTERNAL: single Gemini call
-    # ============================================================
     def _generate_once(
         self,
         prompt: str,
@@ -182,9 +176,7 @@ class LLMClient:
 
         return text.strip(), truncated
 
-    # ============================================================
     # EMBEDDINGS
-    # ============================================================
     def embed(self, texts: List[str]) -> List[List[float]]:
         """
         Google Gemini does NOT support true batch embedding.

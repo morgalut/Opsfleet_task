@@ -14,16 +14,12 @@ from .config import load_config
 from .llm_client import LLMClient
 
 
-# ================================================================
 # Utility – stable hash for deduplication
-# ================================================================
 def fast_hash(text: str) -> str:
     return hashlib.blake2b(text.encode("utf-8"), digest_size=16).hexdigest()
 
 
-# ================================================================
 # Load documentation files
-# ================================================================
 def load_raw_files(raw_docs_dir: str) -> List[Path]:
     raw_dir = Path(raw_docs_dir)
 
@@ -40,9 +36,7 @@ def load_raw_files(raw_docs_dir: str) -> List[Path]:
     return files
 
 
-# ================================================================
 # Gemini-Safe Chunker (never exceeds 30k bytes)
-# ================================================================
 def chunk_text(text: str, max_bytes: int = 28000, split_bytes: int = 24000) -> List[str]:
     chunks: List[str] = []
     paragraphs = [p.strip() for p in text.split("\n\n") if p.strip()]
@@ -74,9 +68,7 @@ def chunk_text(text: str, max_bytes: int = 28000, split_bytes: int = 24000) -> L
     return chunks
 
 
-# ================================================================
 # Main index builder — saves ONLY embeddings.npy + docs.jsonl
-# ================================================================
 def build_index(config):
 
     os.makedirs(config.index_dir, exist_ok=True)
@@ -154,7 +146,6 @@ def build_index(config):
     print(f"Docs JSONL:        {docs_path}")
 
 
-# ================================================================
 def main():
     config = load_config(cli_mode="offline")
     build_index(config)

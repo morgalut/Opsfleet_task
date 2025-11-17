@@ -1,100 +1,365 @@
-# LangGraph Helper Agent
 
-## 1. What you’re actually being asked to build
+# **LangGraph Helper Agent — Documentation**
 
-You’re building a developer-facing Q&A agent that helps people work with **LangGraph** and **LangChain**, with two distinct runtime modes:
+A developer-facing AI assistant that explains and demonstrates **LangGraph**, **LangChain**, persistence, retries, state machines, and advanced orchestration patterns.
 
-### Offline mode
+The system runs in two modes:
 
-- No internet / web access.
-- But you **can** still call LLMs via API (Google Gemini).
-- Knowledge comes from **locally stored docs**, starting with the `llms.txt`-based LangGraph & LangChain documentation (or `llms-full.txt` snapshot).
-- You must define how you **downloaded, cleaned, and indexed** that data.
-- If you add more docs, you must explain how they **stay fresh**.
+* **Offline mode:** local RAG over pre-indexed documentation
+* **Online mode:** live web search + offline fallback
+* **LLM:** **Google Gemini** (AI Studio free tier)
 
-### Online mode
+Built in Python and orchestrated with **LangGraph**.
 
-- Internet allowed.
-- Agent can use **web search / APIs** to fetch up-to-date docs or examples (e.g. Tavily, DuckDuckGo, Exa, etc.), all on free tiers.
-- README must clearly say **what external services** you use, how to get their API keys, and why you picked them.
+---
 
-In both modes, the agent is supposed to answer **practical, technical questions** about using LangGraph / LangChain, including reasonably advanced topics:
+# ** 1. Architecture Overview**
 
-- Persistence & checkpointers  
-- StateGraph vs MessageGraph  
-- Human-in-the-loop flows  
-- Error handling & retries  
-- Best practices for state management, etc.
+Below is the high-level architecture showing the flow from CLI → Config → LangGraph → Retrieval → Final Answer:
 
-Additional constraints:
+```
+┌────────────────────────┐
+│         CLI            │
+│   main.py entrypoint   │
+└────────────┬───────────┘
+             │
+             ▼
+┌────────────────────────┐
+│       ConfigLoader     │
+│ (AppConfig + env vars) │
+└────────────┬───────────┘
+             │
+             ▼
+┌────────────────────────┐
+│      LLMClient         │
+│  (Gemini text/embed)   │
+└────────────┬───────────┘
+             │
+             ▼
+┌────────────────────────┐
+│    Retriever Builder   │───────┐
+│ offline / online mode  │       │
+└────────────┬───────────┘       │
+             │                   │
+             ▼                   │
+      ┌──────────────┐    ┌───────────────┐
+      │ Offline RAG  │    │ Online Search │
+      │ embeddings   │    │ Tavily / DDG  │
+      └──────────────┘    └───────────────┘
+             │                    │
+             └──────────┬────────┘
+                        ▼
+              Provides docs → LangGraph
+```
 
-- **LLM:** must use **Google Gemini** via the free API (from Google AI Studio).
-- **Language:** Python.
-- **Orchestration:** platform of your choice (this project uses **LangGraph**).
-- **Portability:** project must run easily on another machine (clean env setup, clear instructions).
+---
 
-Deliverables (via a public GitHub repository):
+## **LangGraph Workflow**
 
-- Working code (both offline and online modes).
-- Documentation (README) covering:
-  - Architecture
-  - Operating modes
-  - Data strategy and update/freshness
-  - Setup and example usage
+The core LangGraph agent uses three orchestrators:
 
-> The rest of this README will describe:
->
-> - Architecture overview (graph design, state, nodes)
-> - Offline vs online mode implementations
-> - Data preparation and update strategy
-> - Setup instructions and example commands
+* **basic** → simple RAG + answer
+* **ORC** → planning, retrieval per subquestion, structured answer
+* **ReAct** → Thought/Action/Observation loop
+* **hybrid** → ORC entry but extensible
 
-```sh
+```
+                           ┌───────────────┐
+                           │   analyze     │
+                           │ (select path) │
+                           └───────┬───────┘
+                                   │
+       ┌───────────────────────────┼───────────────────────────┐
+       ▼                           ▼                           ▼
+┌──────────────┐          ┌──────────────────┐        ┌─────────────────┐
+│   basic      │          │       ORC         │        │     ReAct       │
+└──────┬───────┘          └─────────┬──────────┘        └────────┬────────┘
+       │                             │                             │
+       ▼                             ▼                             ▼
+retrieve_basic → draft_basic      orc_plan → orc_retrieve → orc_answer    react_decide → react_act ↔ react_decide → react_finish
+       │                             │                             │
+       └────────────── END ◄────────╯                             └────── END
+```
+
+---
+
+## **Retry Architecture**
+
+The project includes two retry wrappers:
+
+```
+with_retry(fn)           RetryNode(base_node)
+```
+
+Retry behavior uses:
+
+* exponential backoff
+* jitter
+* attach error to state instead of crashing
+
+Diagram:
+
+```
+         ┌───────────────┐
+         │  Node (fn)     │
+         └───────┬────────┘
+                 │
+                 ▼
+     ┌──────────────────────────┐
+     │  Retry Wrapper (3–4 tries│
+     │  backoff + jitter        │
+     └───────────┬─────────────┘
+                 │ success
+                 ▼
+              Next node
+                 │ failure (max)
+                 ▼
+      state["error"] added safely
+```
+
+---
+
+# ** 2. Operating Modes**
+
+## **Offline Mode (Local RAG)**
+
+```
+AGENT_MODE=offline
+```
+
+Characteristics:
+
+* No internet
+* Still uses Gemini API (allowed)
+* RAG runs on **local vector index**
+* Deterministic and fast
+
+**Index files used:**
+
+```
+data/index/embeddings.npy
+data/index/docs.jsonl
+```
+
+---
+
+## **Online Mode (Web + RAG Hybrid)**
+
+```
+AGENT_MODE=online
+```
+
+Uses:
+
+* Tavily (if API key available)
+* DuckDuckGo (ddgs or duckduckgo-search)
+* Scoring:
+
+  * boosts LangChain/LangGraph domains
+  * keyword boosting
+* Low-quality detection → automatic offline fallback
+
+### Why?
+
+* Fresh documentation
+* Can reference latest LangGraph/LangChain releases
+* Enables advanced ReAct workflows that query the web
+
+---
+
+## **Switching Modes**
+
+CLI:
+
+```
+--mode offline
+--mode online
+```
+
+Environment:
+
+```
+AGENT_MODE=offline
+AGENT_MODE=online
+```
+
+---
+
+# ** 3. Data Freshness Strategy**
+
+## **Offline Data Freshness**
+
+Offline docs come from `.txt` snapshots stored in:
+
+```
+data/raw/*.txt
+```
+
+To update the offline dataset:
+
+1. Replace/append new `.txt` docs in `data/raw/`
+2. Rebuild index:
+
+```
 python -m src.helper_agent.prepare_docs
 ```
 
-```sh
-# Basic (original) pipeline
-python main.py --mode offline --strategy basic \
-  "What is the difference between StateGraph and MessageGraph?"
+### Indexing steps:
 
-python main.py --mode online --strategy basic \
-  "What is the difference between StateGraph and MessageGraph?"
+```
+raw text
+   │
+   ▼
+chunk_text()  (safe: ≤30kB for Gemini)
+   │
+dedup via blake2b hash
+   │
+Gemini embedding model
+   │
+save → embeddings.npy + docs.jsonl
+```
+
+ASCII diagram:
+
+```
+┌──────────────┐
+│ raw txt docs │
+└───────┬──────┘
+        ▼
+ Chunker (safe byte limits)
+        ▼
+Deduper ─────────┐
+        ▼         │
+Embedder (Gemini) │
+        ▼         │
+Save JSONL + NPY  │
+        ▼         │
+Local RAG index ◄─┘
 ```
 
 ---
-```sh
-# ORC-style planning
-python main.py --mode offline --strategy orc \
-  "How do I add persistence to a LangGraph agent?"
 
+## **Online Data Freshness**
+
+Online mode fetches live docs from web.
+
+Priority:
+
+1. Tavily → preferred if key
+2. DDG → free fallback
+3. Offline RAG → if results weak
+
+Scoring ensures results come from:
+
+* `langchain-ai.github.io`
+* `python.langchain.com`
+* `langgraph.readthedocs.io`
+* GitHub LangChain repos
+
+---
+
+# ** 4. Setup Instructions**
+
+## **1. Clone and install**
+
+```
+git clone <your_repo>
+cd Opsfleet_task
+```
+
+```
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+```
+
+---
+
+## **2. Add `.env`**
+
+```
+GEMINI_API_KEY=your_key_here
+```
+
+---
+
+## **3. Build offline index**
+
+```
+python -m src.helper_agent.prepare_docs
+```
+
+---
+
+## **4. Run examples**
+
+### Basic RAG
+
+```
+python main.py --mode offline --strategy basic \
+  "What is the difference between StateGraph and MessageGraph?"
+```
+
+### ORC Planning
+
+```
 python main.py --mode online --strategy orc \
   "How do I add persistence to a LangGraph agent?"
 ```
----
-```sh
-# ReAct-style reasoning
-python main.py --mode online --strategy react \
-  "Show me human-in-the-loop with LangGraph"
 
+### ReAct tool use
 
+```
 python main.py --mode online --strategy react \
   "Show me human-in-the-loop with LangGraph"
 ```
 
-```sh
-# Hybrid (currently = ORC pipeline entry; you can extend)
+### Hybrid + Debug
+
+```
 export AGENT_REASONING=hybrid
-## debug - Debug mode shows the agents' thought processes and how the system works.
+
 python main.py --mode online --strategy hybrid --debug \
   "How do I handle retries in LangGraph nodes?"
+```
 
-
-python main.py --mode offline \
-  "How do I handle retries in LangGraph nodes?"
-
-
-python main.py --mode online --strategy hybrid \
-  "How do I handle retries in LangGraph nodes?"
+### Fully offline
 
 ```
+python main.py --mode offline \
+  "How do I handle retries in LangGraph nodes?"
+```
+
+---
+
+# ** 5. Version Requirements**
+
+| Component                | Version       |
+| ------------------------ | ------------- |
+| Python                   | 3.10+         |
+| LangGraph                | Latest stable |
+| LangChain-Core           | Latest stable |
+| google-generativeai      | ≥ 0.7.0       |
+| numpy                    | ≥ 1.24        |
+| ddgs / duckduckgo-search | optional      |
+| tqdm                     | ≥ 4.0         |
+| python-dotenv            | required      |
+
+---
+
+# ** 6. Summary**
+
+This project provides:
+
+ Two-mode intelligent LangGraph agent
+ Offline RAG with clean vector index
+ Online search with scoring + fallback
+ Gemini LLM with automatic retry + truncation recovery
+ ORC planner, ReAct agent, and hybrid pipeline
+ Full retry framework for LangGraph nodes
+ Easy portability and environment setup
+
+
+
+
+

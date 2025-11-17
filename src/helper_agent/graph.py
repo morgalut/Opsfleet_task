@@ -10,13 +10,13 @@ from .config import AppConfig
 from .llm_client import LLMClient
 from .models import AgentState, Document
 from .retrievers import OfflineDocRetriever, OnlineDocRetriever, DocRetriever
-from .retry_utils import with_retry
+from .retry_utils import with_rate_limit_retry
 from .retry_node import RetryNode
 
 
-# ------------------------------------------------------------
+
 # Helper: build retriever from mode
-# ------------------------------------------------------------
+
 def build_retriever(config: AppConfig, llm_client: LLMClient) -> DocRetriever:
     return (
         OfflineDocRetriever(config, llm_client)
@@ -25,9 +25,9 @@ def build_retriever(config: AppConfig, llm_client: LLMClient) -> DocRetriever:
     )
 
 
-# ------------------------------------------------------------
+
 # Common / basic pipeline nodes
-# ------------------------------------------------------------
+
 def node_analyze_question(state: AgentState) -> AgentState:
     """
     Currently a light node – could be extended with classification.
@@ -48,52 +48,70 @@ def node_draft_answer(state: AgentState, llm_client: LLMClient) -> AgentState:
     question = state["question"]
     docs = state.get("retrieved_docs", [])
 
-    ctx = "\n\n".join(
-        f"[doc {i+1}] {d.source}\n{d.content}"
-        for i, d in enumerate(docs)
+    evidence = "\n\n".join(
+        f"[doc {i+1}] {d.source}\n{d.content}" for i, d in enumerate(docs)
     )
 
     system = (
-        "You are a LangGraph/LangChain expert. "
-        "Use documentation context when helpful. "
-        "Provide clear explanations and working Python examples."
+        "You are a STRICT LangGraph/LangChain expert.\n"
+        "If the documentation does NOT contain enough evidence, reply:\n"
+        "\"Insufficient documentation in context to answer accurately.\"\n"
+        "Do NOT invent APIs.\n"
+        "Do NOT infer features not explicitly shown.\n"
+        "Prefer short, precise, code-backed explanations."
     )
 
-    prompt = f"Question:\n{question}\n\nDocs:\n{ctx}"
+    prompt = f"Question:\n{question}\n\nDocumentation:\n{evidence}"
+
     state["final_answer"] = llm_client.generate(prompt, system_instruction=system)
     return state
 
 
-# ------------------------------------------------------------
+
+
 # ORC-style nodes: plan → retrieve → answer
-# ------------------------------------------------------------
+
 def node_orc_plan(state: AgentState, llm_client: LLMClient) -> AgentState:
     question = state["question"]
 
     system = (
-        "You are a senior LangGraph/LangChain engineer. "
-        "Break the question into 2–6 sub-questions. "
-        "Return only a numbered list."
+        "You are a senior LangGraph engineer.\n"
+        "Break the question into 2–6 SMALL sub-questions.\n"
+        "Each sub-question MUST:\n"
+        "  • Refer to REAL LangGraph concepts only.\n"
+        "  • Not mention LangChain memory modules.\n"
+        "  • Not introduce hallucinated concepts.\n"
+        "Return ONLY a numbered list."
     )
 
-    plan = llm_client.generate(
+    raw_plan = llm_client.generate(
         prompt=question,
         system_instruction=system,
-        max_output_tokens=512,
-        temperature=0.1,
+        max_output_tokens=400,
+        temperature=0.05,
     )
 
-    subqs: List[str] = []
-    for line in plan.splitlines():
-        m = re.match(r"^\d+\.\s*(.+)$", line.strip())
+    # Extract valid lines only
+    subqs = []
+    for line in raw_plan.splitlines():
+        m = re.match(r"^\s*\d+\.\s*(.+)$", line.strip())
         if m:
             subqs.append(m.group(1))
+
     if not subqs:
         subqs = [question]
 
-    state["orc_plan"] = plan
+    # Remove forbidden patterns
+    banned = (
+        "long-term knowledge", "memory module", "agent memory",
+        "LangChain memory", "chat history", "knowledge base"
+    )
+    subqs = [sq for sq in subqs if not any(b in sq.lower() for b in banned)]
+
+    state["orc_plan"] = raw_plan
     state["orc_subquestions"] = subqs
     return state
+
 
 
 def node_orc_retrieve(state: AgentState, retriever: DocRetriever) -> AgentState:
@@ -117,26 +135,99 @@ def node_orc_answer(state: AgentState, llm_client: LLMClient) -> AgentState:
     plan = state.get("orc_plan", "")
     docs = state.get("retrieved_docs", [])
 
-    ctx = "\n\n".join(
-        f"[doc {i+1}] {d.source}\n{d.content}"
-        for i, d in enumerate(docs)
+    
+    # Build evidence block
+    
+    evidence = "\n\n".join(
+        f"[doc {i+1}] {d.source}\n{d.content}" for i, d in enumerate(docs)
     )
 
-    system = (
-        "You are a LangGraph/LangChain expert. "
-        "Use the ORC plan + documentation to produce a structured answer."
+    
+    # Step 1 — score evidence
+    
+    KEYWORDS = [
+        "persist", "persistence", "checkpoint", "checkpointer", "memory",
+        "store", "sqlite", "postgres", "saver", "state", "thread", "resume",
+        "long-term", "namespace"
+    ]
+
+    evidence_lower = evidence.lower()
+    relevance_score = sum(1 for kw in KEYWORDS if kw in evidence_lower)
+
+    weak_evidence = relevance_score == 0 or len(evidence.strip()) < 500
+
+    
+    # STRICT PHASE: Use documentation ONLY
+    
+    strict_system = (
+        "You are a LangGraph expert. Answer STRICTLY using the provided "
+        "documentation. Combine the ORC plan + evidence.\n\n"
+        "Rules:\n"
+        " - Only use APIs, terms, and mechanisms explicitly found in the docs.\n"
+        " - If ANY required information is missing, output EXACTLY:\n"
+        "     'The provided documentation does not contain enough information.'\n"
+        " - NEVER hallucinate APIs or functionality.\n"
+        " - NEVER use LangChain memory concepts when describing LangGraph.\n"
     )
 
-    prompt = f"Question:\n{question}\n\nPlan:\n{plan}\n\nDocs:\n{ctx}"
-    state["final_answer"] = llm_client.generate(
-        prompt, system_instruction=system, max_output_tokens=2048
+    strict_prompt = (
+        f"Question:\n{question}\n\n"
+        f"Plan:\n{plan}\n\n"
+        f"Documentation:\n{evidence}\n\n"
+        "Produce the answer:"
     )
+
+    strict_answer = llm_client.generate(
+        strict_prompt,
+        system_instruction=strict_system,
+        max_output_tokens=2048,
+    ).strip()
+
+    # If strict mode could not answer → fall back
+    if (
+        "not contain enough information" in strict_answer.lower()
+        or "insufficient" in strict_answer.lower()
+        or weak_evidence
+    ):
+        # FALLBACK PHASE: Answer using general LangGraph knowledge
+        fallback_system = (
+            "You are a senior LangGraph engineer.\n"
+            "Provide a precise, correct, NON-hallucinated answer using known "
+            "LangGraph concepts such as:\n"
+            " - checkpointers (MemorySaver, SqliteSaver, PostgresSaver)\n"
+            " - long-term store namespaces\n"
+            " - state persistence across super-steps\n"
+            " - resumability and thread identifiers\n\n"
+            "You MAY use general LangGraph knowledge.\n"
+            "You MUST NOT invent APIs that do not exist.\n"
+            "Prefer concise, implementation-ready explanations.\n"
+        )
+
+        fallback_prompt = (
+            f"User Question:\n{question}\n\n"
+            f"ORC Plan:\n{plan}\n\n"
+            f"Retrieved Documentation (may be insufficient):\n{evidence}\n\n"
+            "Now produce an accurate answer:"
+        )
+
+        fallback_answer = llm_client.generate(
+            fallback_prompt,
+            system_instruction=fallback_system,
+            max_output_tokens=2048,
+        )
+
+        state["final_answer"] = fallback_answer
+        return state
+
+    # STRICT answer sufficient
+    state["final_answer"] = strict_answer
     return state
 
 
-# ------------------------------------------------------------
+
+
 # ReAct-style nodes: Thought / Action / Observation loop
-# ------------------------------------------------------------
+
 MAX_REACT_STEPS = 4
 
 
@@ -148,88 +239,62 @@ def _ensure_react_init(state: AgentState) -> None:
 
 
 def node_react_decide(state: AgentState, llm_client: LLMClient) -> AgentState:
-    """
-    One ReAct decision step:
-      - Observes the scratchpad (Thought/Action/Observation so far)
-      - Either chooses an Action: search[...] OR Final: ...
-    """
     _ensure_react_init(state)
-    state["iterations"] = int(state.get("iterations", 0)) + 1
+    state["iterations"] = int(state["iterations"]) + 1
 
-    # Safety: stop if too many steps
     if state["iterations"] > MAX_REACT_STEPS:
-        system = (
-            "You attempted several ReAct steps. "
-            "Now produce the final best answer."
-        )
-        prompt = (
-            f"Question:\n{state['question']}\n\n"
-            f"Scratchpad:\n{state['scratchpad']}"
-        )
-        state["final_answer"] = llm_client.generate(
-            prompt, system_instruction=system
-        )
         state["react_mode"] = "finish"
+        state["final_answer"] = "Exceeded max reasoning depth. Producing final answer."
         return state
 
     question = state["question"]
-    scratchpad = state.get("scratchpad", "")
-
-    tools_desc = (
-        "You have exactly one tool you can call:\n\n"
-        "Tool: search[<query>]\n"
-        "  - Uses either local LangGraph/LangChain docs (offline) or web search (online)\n"
-        "  - <query> should be a short description of what you want to look up\n\n"
-        "Your output MUST be in one of the following formats:\n\n"
-        "1) To call the tool:\n"
-        "Thought: <your reasoning>\n"
-        "Action: search[<query>]\n\n"
-        "2) To finish with a final answer:\n"
-        "Thought: <your reasoning>\n"
-        "Final: <your final answer>\n"
-    )
+    scratch = state["scratchpad"]
 
     system = (
-        "You are a LangGraph/LangChain expert using the ReAct pattern "
-        "(Reasoning + Acting). Think step by step, decide whether you "
-        "need to call the search tool, or you can answer now."
+        "You are a STRICT LangGraph/LangChain expert.\n"
+        "Your reasoning MUST stay within the retrieved evidence.\n"
+        "Valid Actions: search[<query>] ONLY for LangGraph topics.\n"
+        "Forbidden: hallucinations, invented APIs, mixing LC memory.\n"
+        "Allowed Final: ONLY if enough evidence exists.\n"
     )
 
     prompt = (
         f"Question:\n{question}\n\n"
-        f"Scratchpad so far (Thought/Action/Observation):\n{scratchpad}\n\n"
-        f"{tools_desc}\n"
-        "Decide your next step."
+        f"Scratchpad:\n{scratch}\n\n"
+        "Choose next step: Thought + Action(...) OR Thought + Final(...)."
     )
 
-    output = llm_client.generate(
-        prompt=prompt,
-        system_instruction=system,
-        max_output_tokens=512,
-        temperature=0.2,
-    )
+    output = llm_client.generate(prompt, system_instruction=system)
 
-    # Append raw model output to scratchpad for transparency
-    scratchpad += f"\n\nStep {state['iterations']} model output:\n{output}\n"
-    state["scratchpad"] = scratchpad
+    # Save raw output
+    state["scratchpad"] += f"\n\n[Step {state['iterations']}]\n{output}\n"
 
-    # Parse for Final:
-    final_match = re.search(r"Final:\s*(.+)", output, re.DOTALL)
-    if final_match:
-        state["final_answer"] = final_match.group(1).strip()
+    # Parse final
+    final = re.search(r"Final:\s*(.+)", output, re.DOTALL)
+    if final:
+        ans = final.group(1).strip()
+        if "insufficient" in ans.lower():
+            # enforce fallback rule
+            state["final_answer"] = "Insufficient documentation in context."
+        else:
+            state["final_answer"] = ans
         state["react_mode"] = "finish"
         return state
 
-    # Parse for Action: search[...]
-    action_match = re.search(r"Action:\s*search\[(.+?)\]", output, re.DOTALL)
-    if action_match:
-        query = action_match.group(1).strip()
-        state["react_query"] = query
+    # Parse search
+    action = re.search(r"Action:\s*search\[(.+?)\]", output)
+    if action:
+        q = action.group(1).strip()
+        # Reject irrelevant searches
+        allowed = ["langgraph", "persistence", "state", "checkpointer", "store", "memory"]
+        if not any(a in q.lower() for a in allowed):
+            q = question  # restrict to main question
+        state["react_query"] = q
         state["react_mode"] = "act"
         return state
 
-    # If we can't parse anything, just finish with the whole output as answer
-    state["final_answer"] = output.strip()
+    # fallback
+    state["final_answer"] = "Insufficient structure to continue."
     state["react_mode"] = "finish"
     return state
 
@@ -293,9 +358,9 @@ def node_react_finish(state: AgentState, llm_client: LLMClient) -> AgentState:
     return state
 
 
-# ------------------------------------------------------------
+
 # Routing helpers
-# ------------------------------------------------------------
+
 def route_from_analyze(state: AgentState) -> str:
     """
     Decide which branch of the graph to take based on reasoning_style.
@@ -316,9 +381,9 @@ def route_react_next(state: AgentState) -> str:
     return "finish"
 
 
-# ------------------------------------------------------------
+
 # OPTIONAL: example retry-enabled nodes (not wired into main flow)
-# ------------------------------------------------------------
+
 def risky_langgraph_node(state: AgentState) -> AgentState:
     """
     Example node that always fails to demonstrate retries.
@@ -327,13 +392,13 @@ def risky_langgraph_node(state: AgentState) -> AgentState:
     raise RuntimeError("Simulated failure for retry testing")
 
 
-risky_retry_node = with_retry(
+risky_retry_node = with_rate_limit_retry(
     risky_langgraph_node,
     max_attempts=3,
     base_delay=1.0,
-    exception_types=(RuntimeError,),
     node_name="risky_langgraph_node",
 )
+
 
 
 def call_llm_node(state: AgentState) -> AgentState:
@@ -353,9 +418,9 @@ llm_retry_node = RetryNode(
 ).as_node()
 
 
-# ------------------------------------------------------------
+
 # Build compiled LangGraph app
-# ------------------------------------------------------------
+
 def create_agent_app(config: AppConfig):
     llm = LLMClient(config)
     retriever = build_retriever(config, llm)

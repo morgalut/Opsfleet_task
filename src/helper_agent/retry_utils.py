@@ -1,62 +1,81 @@
-# src/helper_agent/retry_utils.py
-from __future__ import annotations
-
 import time
 import random
 import traceback
 from typing import Callable, Tuple, Type
 
-from .models import AgentState
+from google.api_core.exceptions import ResourceExhausted
 
-ExceptionTypes = Tuple[Type[BaseException], ...]
+def is_retryable_error(e: Exception) -> bool:
+    msg = str(e).lower()
+
+    retryable_text = (
+        "resource exhausted",
+        "429",
+        "too many requests",
+        "exceeded the provisioned throughput",
+        "quota",
+        "capacity",
+        "temporarily unavailable",
+    )
+
+    if any(t in msg for t in retryable_text):
+        return True
+
+    # For Google exceptions:
+    from google.api_core.exceptions import (
+        ResourceExhausted,
+        ServiceUnavailable,
+        InternalServerError,
+        DeadlineExceeded,
+    )
+
+    return isinstance(e, (
+        ResourceExhausted,
+        ServiceUnavailable,   # 503
+        InternalServerError,  # 500
+        DeadlineExceeded,     # 504
+    ))
 
 
-def with_retry(
-    fn: Callable[[AgentState], AgentState],
-    max_attempts: int = 3,
-    base_delay: float = 1.0,
-    exception_types: ExceptionTypes = (Exception,),
-    node_name: str | None = None,
-) -> Callable[[AgentState], AgentState]:
-    """
-    Wrap a LangGraph node function with retry logic.
-
-    - fn: node(state) -> state
-    - max_attempts: max times to try
-    - base_delay: initial delay for exponential backoff
-    - exception_types: which exceptions to retry
-    - node_name: for logging (defaults to fn.__name__)
-    """
-
+def with_rate_limit_retry(
+    fn,
+    max_attempts=6,
+    base_delay=1.0,
+    max_delay=60.0,
+    node_name=None,
+):
     name = node_name or getattr(fn, "__name__", "node")
 
-    def wrapped(state: AgentState) -> AgentState:
-        last_exc: BaseException | None = None
-
+    def wrapped(state):
         for attempt in range(1, max_attempts + 1):
             try:
                 return fn(state)
-            except exception_types as e:  # type: ignore[misc]
-                last_exc = e
-                print(
-                    f"[Retry:{name}] attempt {attempt}/{max_attempts} failed: {e}"
-                )
-                traceback.print_exc()
 
-                if attempt == max_attempts:
-                    # attach error info to state and return
-                    new_state = dict(state)
-                    new_state["error"] = (
-                        f"{name} failed after {max_attempts} attempts: {e}"
-                    )
-                    return new_state  # type: ignore[return-value]
+            except Exception as e:
+                # check if retryable
+                if not is_retryable_error(e):
+                    print(f"[Retry:{name}] NON-RETRYABLE → raising: {e}")
+                    raise
 
-                # exponential backoff + jitter
-                delay = base_delay * (2 ** (attempt - 1)) + random.uniform(0.0, 0.5)
-                print(f"[Retry:{name}] sleeping {delay:.2f}s before retry...")
+                print(f"[Retry:{name}] attempt {attempt}/{max_attempts} → retryable error: {e}")
+
+                # Check Retry-After header (Vertex usually includes it)
+                retry_after = getattr(e, "retry_after", None)
+                if retry_after:
+                    delay = retry_after
+                else:
+                    delay = min(base_delay * (2 ** (attempt - 1)), max_delay)
+                    delay += random.uniform(0, 0.5)
+
+                print(f"[Retry:{name}] sleeping {delay:.2f}s…")
                 time.sleep(delay)
 
-        # Should not reach here, but keep mypy happy:
+                if attempt == max_attempts:
+                    new_state = dict(state)
+                    new_state["error"] = f"{name} failed after {max_attempts} attempts: {e}"
+                    return new_state
+
         return state
 
     return wrapped
+

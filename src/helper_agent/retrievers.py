@@ -12,18 +12,14 @@ from .llm_client import LLMClient
 from .models import Document
 
 
-# ================================================================
 # Base Interface
-# ================================================================
 class DocRetriever:
     """Abstract base class."""
     def retrieve(self, query: str, k: int = 5) -> List[Document]:
         raise NotImplementedError
 
 
-# ================================================================
 # OFFLINE RETRIEVER (VECTOR RAG)
-# ================================================================
 class OfflineDocRetriever(DocRetriever):
     """
     Retrieves documentation chunks from:
@@ -83,9 +79,7 @@ class OfflineDocRetriever(DocRetriever):
         return out
 
 
-# ================================================================
 # ONLINE RETRIEVER (TAVILY + fallback + scoring)
-# ================================================================
 class OnlineDocRetriever(DocRetriever):
     """
     Unified online retriever with:
@@ -151,9 +145,9 @@ class OnlineDocRetriever(DocRetriever):
             self.offline = None
             print("[WARN] Offline index unavailable.")
 
-    # --------------------------
+    
     # Score result
-    # --------------------------
+    
     def _score_result(self, text: str, url: str) -> float:
         score = 0
 
@@ -171,9 +165,9 @@ class OnlineDocRetriever(DocRetriever):
 
         return score
 
-    # --------------------------
+    
     # Main search
-    # --------------------------
+    
     def retrieve(self, query: str, k: int = 5) -> List[Document]:
         boosted_query = (
             f"{query} site:langchain-ai.github.io "
@@ -232,9 +226,9 @@ class OnlineDocRetriever(DocRetriever):
 
         return docs[:k]
 
-    # --------------------------
+    
     # Offline fallback
-    # --------------------------
+    
     def _offline_fallback(self, query: str, k: int) -> List[Document]:
         if not self.offline:
             return [Document("(no search available)", "none", {})]
