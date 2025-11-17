@@ -14,4 +14,6 @@ duckduckgo-search>=6.2.0  # Example online search provider (free, no key)
 python-dotenv>=1.0.1      # Optional: load .env
 
 rich>=13.9.0              # Nice CLI output (optional)
-
+duckduckgo_search
+ddgs
+tavily

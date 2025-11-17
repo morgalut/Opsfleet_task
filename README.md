@@ -49,12 +49,52 @@ Deliverables (via a public GitHub repository):
 > - Data preparation and update strategy
 > - Setup instructions and example commands
 
-
-
 ```sh
 python -m src.helper_agent.prepare_docs
 ```
+
+```sh
+# Basic (original) pipeline
+python main.py --mode offline --strategy basic \
+  "What is the difference between StateGraph and MessageGraph?"
+
+python main.py --mode online --strategy basic \
+  "What is the difference between StateGraph and MessageGraph?"
+```
+
 ---
 ```sh
-python main.py --mode offline "How do I add persistence to a LangGraph agent?"
+# ORC-style planning
+python main.py --mode offline --strategy orc \
+  "How do I add persistence to a LangGraph agent?"
+
+python main.py --mode online --strategy orc \
+  "How do I add persistence to a LangGraph agent?"
+```
+---
+```sh
+# ReAct-style reasoning
+python main.py --mode online --strategy react \
+  "Show me human-in-the-loop with LangGraph"
+
+
+python main.py --mode online --strategy react \
+  "Show me human-in-the-loop with LangGraph"
+```
+
+```sh
+# Hybrid (currently = ORC pipeline entry; you can extend)
+export AGENT_REASONING=hybrid
+## debug - Debug mode shows the agents' thought processes and how the system works.
+python main.py --mode online --strategy hybrid --debug \
+  "How do I handle retries in LangGraph nodes?"
+
+
+python main.py --mode offline \
+  "How do I handle retries in LangGraph nodes?"
+
+
+python main.py --mode online --strategy hybrid \
+  "How do I handle retries in LangGraph nodes?"
+
 ```
