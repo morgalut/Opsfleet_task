@@ -7,13 +7,15 @@ The system runs in two modes:
 
 * **Offline mode:** local RAG over pre-indexed documentation
 * **Online mode:** live web search + offline fallback
-* **LLM:** **Google Gemini** (AI Studio free tier)
 
-Built in Python and orchestrated with **LangGraph**.
 
 ---
 
-# ** 1. Architecture Overview**
+# Built in Python and orchestrated with **LangGraph**.
+1. Architecture Overview**
+
+Built in Python and orchestrated with **LangGraph**.
+
 
 Below is the high-level architecture showing the flow from CLI → Config → LangGraph → Retrieval → Final Answer:
 
@@ -56,7 +58,7 @@ Below is the high-level architecture showing the flow from CLI → Config → La
 
 ## **LangGraph Workflow**
 
-The core LangGraph agent uses three orchestrators:
+The core LangGraph agent uses four orchestrators:
 
 * **basic** → simple RAG + answer
 * **ORC** → planning, retrieval per subquestion, structured answer
@@ -72,13 +74,13 @@ The core LangGraph agent uses three orchestrators:
        ┌───────────────────────────┼───────────────────────────┐
        ▼                           ▼                           ▼
 ┌──────────────┐          ┌──────────────────┐        ┌─────────────────┐
-│   basic      │          │       ORC         │        │     ReAct       │
-└──────┬───────┘          └─────────┬──────────┘        └────────┬────────┘
-       │                             │                             │
-       ▼                             ▼                             ▼
+│   basic      │          │       ORC        │        │     ReAct       │
+└──────┬───────┘          └─────────┬────────┘        └────────┬────────┘
+       │                            │                          │
+       ▼                            ▼                          ▼
 retrieve_basic → draft_basic      orc_plan → orc_retrieve → orc_answer    react_decide → react_act ↔ react_decide → react_finish
-       │                             │                             │
-       └────────────── END ◄────────╯                             └────── END
+       │                            │                           │
+       └────────────── END ◄────────╯                           └────── END
 ```
 
 ---
@@ -101,14 +103,14 @@ Diagram:
 
 ```
          ┌───────────────┐
-         │  Node (fn)     │
-         └───────┬────────┘
+         │  Node (fn)    │
+         └───────┬───────┘
                  │
                  ▼
      ┌──────────────────────────┐
      │  Retry Wrapper (3–4 tries│
      │  backoff + jitter        │
-     └───────────┬─────────────┘
+     └───────────┬──────────────┘
                  │ success
                  ▼
               Next node
@@ -119,7 +121,7 @@ Diagram:
 
 ---
 
-# ** 2. Operating Modes**
+# **2. Operating Modes**
 
 ## **Offline Mode (Local RAG)**
 
@@ -185,7 +187,7 @@ AGENT_MODE=online
 
 ---
 
-# ** 3. Data Freshness Strategy**
+# **3. Data Freshness Strategy**
 
 ## **Offline Data Freshness**
 
@@ -228,7 +230,7 @@ ASCII diagram:
         ▼
  Chunker (safe byte limits)
         ▼
-Deduper ─────────┐
+Deduper ──────────┐
         ▼         │
 Embedder (Gemini) │
         ▼         │
@@ -258,7 +260,7 @@ Scoring ensures results come from:
 
 ---
 
-# ** 4. Setup Instructions**
+# **4. Setup Instructions**
 
 ## **1. Clone and install**
 
@@ -332,7 +334,7 @@ python main.py --mode offline \
 
 ---
 
-# ** 5. Version Requirements**
+# **5. Version Requirements**
 
 | Component                | Version       |
 | ------------------------ | ------------- |
@@ -347,17 +349,17 @@ python main.py --mode offline \
 
 ---
 
-# ** 6. Summary**
+# **6. Summary**
 
 This project provides:
 
- Two-mode intelligent LangGraph agent
- Offline RAG with clean vector index
- Online search with scoring + fallback
- Gemini LLM with automatic retry + truncation recovery
- ORC planner, ReAct agent, and hybrid pipeline
- Full retry framework for LangGraph nodes
- Easy portability and environment setup
+- A two-mode intelligent LangGraph agent  
+- Offline RAG with a clean vector index  
+- Online search with scoring and fallback  
+- Gemini LLM integration with automatic retry and truncation recovery  
+- ORC planner, ReAct agent, and a hybrid reasoning pipeline  
+- A full retry framework for LangGraph nodes  
+- Easy portability and environment setup  
 
 
 
