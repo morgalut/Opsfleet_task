@@ -1,4 +1,3 @@
-# src/helper_agent/prepare_docs.py
 from __future__ import annotations
 
 import os
