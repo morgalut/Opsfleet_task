@@ -265,7 +265,7 @@ Scoring ensures results come from:
 ## **1. Clone and install**
 
 ```
-git clone <your_repo>
+git clone https://github.com/morgalut/Opsfleet_task.git
 cd Opsfleet_task
 ```
 
